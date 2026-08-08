@@ -1,0 +1,1 @@
+export { formatCPF, formatCurrencyBRL, formatDatePtBR, formatDateTimePtBR } from './formatters';

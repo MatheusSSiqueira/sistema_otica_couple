@@ -1,0 +1,221 @@
+# README badge URLs:
+# - https://img.shields.io/badge/ASP.NET_Core-8-512BD4?logo=dotnet
+# - https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=000
+# - https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=fff
+# - https://img.shields.io/badge/Docker-Enabled-2496ED?logo=docker&logoColor=fff
+# - https://img.shields.io/badge/AWS-Cloud-F79400?logo=amazon-aws&logoColor=fff
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: read-all
+
+jobs:
+  build-api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      coverage: ${{ steps.coverage.outputs.line_coverage }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+          cache: true
+          cache-dependency-path: api/OticaCouple.Api.csproj
+
+      - name: Restore API dependencies
+        working-directory: api
+        run: dotnet restore OticaCouple.Api.csproj
+
+      - name: Build API
+        working-directory: api
+        run: dotnet build OticaCouple.Api.csproj --no-restore -c Release
+
+      - name: Run xUnit tests with coverage
+        working-directory: api
+        run: dotnet test OticaCouple.Api.csproj --no-build -c Release --collect:"XPlat Code Coverage" --results-directory ./coverage
+
+      - name: Install ReportGenerator
+        run: dotnet tool install -g dotnet-reportgenerator-globaltool
+
+      - name: Add ReportGenerator to PATH
+        run: echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Generate coverage report
+        working-directory: api
+        run: reportgenerator -reports:"coverage/**/coverage.cobertura.xml" -targetdir:"coverage/report" -reporttypes:"TextSummary;Cobertura"
+
+      - name: Capture coverage percentage
+        id: coverage
+        working-directory: api
+        shell: bash
+        run: |
+          summary_file="$(find coverage/report -iname 'Summary.txt' | head -n 1)"
+
+          if [ -z "$summary_file" ]; then
+            echo "Coverage summary was not generated."
+            exit 1
+          fi
+
+          line_coverage="$(grep -Eo 'Line coverage: [0-9.]+%' "$summary_file" | head -n 1 | grep -Eo '[0-9.]+')"
+
+          if [ -z "$line_coverage" ]; then
+            echo "Unable to parse line coverage from $summary_file"
+            exit 1
+          fi
+
+          echo "line_coverage=$line_coverage" >> "$GITHUB_OUTPUT"
+
+      - name: Upload API coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-coverage
+          path: api/coverage
+          if-no-files-found: error
+
+      - name: Fail if coverage is below 80%
+        working-directory: api
+        shell: bash
+        run: |
+          awk -v coverage="${{ steps.coverage.outputs.line_coverage }}" 'BEGIN { exit (coverage + 0 < 80) ? 1 : 0 }'
+
+  build-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: TypeScript check
+        working-directory: web
+        run: npx tsc --noEmit
+
+      - name: ESLint
+        working-directory: web
+        run: npx eslint src --ext .ts,.tsx --max-warnings 0
+
+      - name: Build web app
+        working-directory: web
+        run: npm run build
+
+      - name: Upload web dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          if-no-files-found: error
+
+#  code-quality:
+#    needs:
+#      - build-api
+#      - build-web
+#    if: always()
+#    runs-on: ubuntu-latest
+#    timeout-minutes: 15
+#    permissions:
+#      contents: read
+#      actions: read
+#      pull-requests: write
+#
+#    steps:
+#      - name: Checkout
+#        uses: actions/checkout@v4
+#        with:
+#          fetch-depth: 0
+#
+#      - name: Download API coverage artifact
+#        uses: actions/download-artifact@v4
+#        continue-on-error: true
+#        with:
+#          name: api-coverage
+#          path: coverage
+#
+#      - name: SonarQube scan
+#        id: sonar
+#        uses: SonarSource/sonarqube-scan-action@v5
+#        env:
+#          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+#          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+#        with:
+#          args: >
+#            -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
+#            -Dsonar.sources=api,web/src
+#            -Dsonar.exclusions=**/bin/**,**/obj/**,web/dist/**,web/node_modules/**
+#            -Dsonar.cs.opencover.reportsPaths=coverage/**/coverage.cobertura.xml
+#            -Dsonar.sourceEncoding=UTF-8
+#
+#      - name: Build and scan API image with Trivy
+#        run: docker build -t otica-couple-api:${{ github.sha }} -f api/Dockerfile api
+#
+#      - name: Trivy vulnerability scan
+#        id: trivy
+#        uses: aquasecurity/trivy-action@0.28.0
+#        with:
+#          image-ref: otica-couple-api:${{ github.sha }}
+#          format: table
+#          exit-code: 1
+#          severity: HIGH,CRITICAL
+#
+#      - name: Comment PR with build summary
+#        if: ${{ github.event_name == 'pull_request' && always() }}
+#        uses: actions/github-script@v7
+#        env:
+#          API_RESULT: ${{ needs.build-api.result }}
+#          WEB_RESULT: ${{ needs.build-web.result }}
+#          COVERAGE: ${{ needs.build-api.outputs.coverage }}
+#          SONAR_STATUS: ${{ steps.sonar.outcome }}
+#          TRIVY_STATUS: ${{ steps.trivy.outcome }}
+#        with:
+#          github-token: ${{ secrets.GITHUB_TOKEN }}
+#          script: |
+#            const coverage = process.env.COVERAGE || 'n/a';
+#            const body = `### CI summary
+#
+#| Check | Result |
+#| --- | --- |
+#| API build | ${process.env.API_RESULT} |
+#| Web build | ${process.env.WEB_RESULT} |
+#| API coverage | ${coverage}% |
+#| SonarQube | ${process.env.SONAR_STATUS} |
+#| Trivy | ${process.env.TRIVY_STATUS} |
+#
+#This run was executed for commit \`${context.sha}\`.`;
+#
+#            await github.rest.issues.createComment({
+#              owner: context.repo.owner,
+#              repo: context.repo.repo,
+#              issue_number: context.payload.pull_request.number,
+#              body,
+#            });

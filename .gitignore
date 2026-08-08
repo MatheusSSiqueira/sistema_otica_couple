@@ -1,0 +1,31 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.rsuser
+*.userosscache
+
+# Node.js
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+
+# VS Code
+.vscode/*
+!.vscode/extensions.json
+
+# Docker
+.env.local
+
+# Misc
+.DS_Store
+Thumbs.db
