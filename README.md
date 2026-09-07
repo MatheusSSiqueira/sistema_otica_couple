@@ -32,6 +32,15 @@ This repository is organized as a multi-platform product suite:
 3. Configure environment variables for local development.
 4. Start the required services with Docker Compose.
 
+## Terraform Bootstrap
+
+The AWS remote state bucket must be created before enabling the S3 backend.
+
+1. Run `make -C infra init` to initialize Terraform with local state only.
+2. Run `make -C infra bootstrap` to create the S3 bucket and DynamoDB lock table.
+3. Copy `infra/backend.tf.example` to `infra/backend.tf`.
+4. Run `make -C infra init-remote` to migrate state into the remote backend.
+
 ## Running Locally
 
 ```bash

@@ -1,0 +1,6 @@
+terraform {
+  backend "s3" {}
+}
+
+# Copy this file to backend.tf only after the S3 state bucket and DynamoDB lock
+# table have been created with local state.
